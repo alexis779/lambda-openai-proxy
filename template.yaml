@@ -13,7 +13,7 @@ Resources:
     Properties:
       CodeUri: dist
       Description: 'OpenAI compatible API proxy running on AWS Lambda'
-      MemorySize: 128
+      MemorySize: 1024
       Timeout: 120
       Handler: index.handler
       Runtime: nodejs20.x
@@ -31,10 +31,13 @@ Resources:
           AllowHeaders:
             - authorization
             - content-type
+            - x-aws-proxy-auth
           AllowMethods:
-            - POST
             - GET
-          AllowCredentials: true
+            - POST
+            - PUT
+            - DELETE
+            - HEAD
           MaxAge: 0
       PackageType: Zip
       Policies:
@@ -42,14 +45,18 @@ Resources:
             - Effect: Allow
               Action:
                 - logs:CreateLogGroup
-              Resource: arn:aws:logs:us-west-2:0123456789:*
-            - Effect: Allow
-              Action:
                 - logs:CreateLogStream
                 - logs:PutLogEvents
-              Resource:
-                - arn:aws:logs:us-west-2:0123456789:log-group:/aws/lambda/openaiProxy:*
+              Resource: '*'
       SnapStart:
         ApplyOn: None
       RuntimeManagementConfig:
         UpdateRuntimeOn: Auto
+
+Outputs:
+  FunctionUrl:
+    Description: Public Function URL for the OpenAI proxy
+    Value: !GetAtt openaiProxyUrl.FunctionUrl
+  FunctionArn:
+    Description: Lambda ARN
+    Value: !GetAtt openaiProxy.Arn

@@ -29,6 +29,7 @@ Great options facilitate deploying the model. They provide public API endpoints 
 * replicate.com
 * modal.com
 * predibase.com
+* **AWS Lambda MicroVMs** running [llama.cpp](https://github.com/ggerganov/llama.cpp) (see [microvm-llama/](microvm-llama/))
 
 But you still need a dedicated backend API to hide the token from your client. It is a security requirement to distribute your Generative AI app without sharing your access token associated with your LLM provider of choice.
 
@@ -54,13 +55,14 @@ Introducing websockets or Server Side Events woud also provide instaneous feedba
 |Replicate|Run Mistral Open Source model with your Replicate token|mistralai/mistral-7b-instruct-v0.2|
 |Predibase|Run a fine-tuned Open Source Mistral model, with QLora adapter|""|
 |Ollama|Run quantized Mistral model locally.|mistral:latest|
+|microvm-llama|llama.cpp on an AWS Lambda MicroVM (UI + OpenAI API via reverse proxy)|openbmb/MiniCPM5-1B-GGUF:Q4_K_M|
 
 
 ## Configuration
 
 Use the lambda public url as the host in openai client library. Enable authorization before launch.
 
-When calling the proxy, prepend the server key (`openai` | `mistral` | `replicate` | `predibase`) in the path of the url. For example to call `replicate`, the host url is `https://abcdefghijklmnopqrstuvwxyz.lambda-url.us-west-2.on.aws/replicate/v1/chat/completions`.
+When calling the proxy, prepend the server key (`openai` | `mistral` | `replicate` | `predibase` | `ollama` | `microvm-llama`) in the path of the url. For example to call `replicate`, the host url is `https://abcdefghijklmnopqrstuvwxyz.lambda-url.us-west-2.on.aws/replicate/v1/chat/completions`.
 
 
 ### YAML server configuration
@@ -92,7 +94,26 @@ ollama:
   url: http://127.0.0.1:11434/v1
   token: ollama_token
   model: mistral:latest
+microvm-llama:
+  url: https://xxxxxxxx.lambda-microvm.us-west-2.on.aws
+  token: "<microvm-auth-token>"
+  model: openbmb/MiniCPM5-1B-GGUF:Q4_K_M
+  reverse_proxy: true
+  auth_header: X-aws-proxy-auth
 ```
+
+### Lambda MicroVM + llama.cpp
+
+[microvm-llama/](microvm-llama/) packages `llama-server` in an AWS Lambda MicroVM. MicroVM ingress requires the `X-aws-proxy-auth` header, which browsers cannot set for a normal page load.
+
+This proxy acts as the **same-origin front door**:
+
+1. Deploy and run the MicroVM (see [microvm-llama/README.md](microvm-llama/README.md)).
+2. Put the MicroVM HTTPS endpoint and a token from `create-microvm-auth-token` into `openai_servers.yaml` as shown above (`reverse_proxy: true`).
+3. Build and deploy this Lambda proxy (`npm run build`, copy `openai_servers.yaml` into `dist/`, then `sam deploy`).
+4. Open the Function URL path `/microvm-llama/` in a browser for the llama.cpp Web UI, or call `/microvm-llama/v1/chat/completions` like any other OpenAI-compatible backend.
+
+With `reverse_proxy: true`, the handler forwards raw HTTP (UI assets, `/props`, `/v1/*`, SSE) and injects `auth_header` instead of using the OpenAI SDK. Tokens expire after at most 60 minutes; refresh the yaml entry and redeploy when they expire.
 
 ## Clients
 ### curl

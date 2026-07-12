@@ -1,0 +1,196 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Lambda MicroVM image running llama.cpp server (MiniCPM5-1B GGUF) at max
+  baseline size (8 GiB / 4 vCPU → 32 GiB / 16 vCPU peak).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: llama-microvm
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,40}[a-z0-9]$"
+    Description: Lower-case name prefix for created resources.
+
+  ImageName:
+    Type: String
+    Default: llama-minicpm-server
+    AllowedPattern: "^[a-zA-Z0-9][a-zA-Z0-9-_]{0,62}$"
+    Description: MicroVM image name (build logs under /aws/lambda/microvms/).
+
+  ArtifactObjectKey:
+    Type: String
+    Default: llama-microvm.zip
+    Description: S3 object key of the zipped Dockerfile + app sources.
+
+  DeployImage:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Set to true after the code artifact has been uploaded to the artifact
+      bucket. First deploy creates bucket + IAM; second deploy builds the image.
+
+  BaseImageVersion:
+    Type: String
+    Default: "0"
+    Description: Managed MicroVM base image version.
+
+Conditions:
+  ShouldDeployImage: !Equals [!Ref DeployImage, "true"]
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-artifacts-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-build-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: artifact-and-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${ArtifactBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/microvms/${ImageName}"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/microvms/${ImageName}:*"
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: "*"
+
+  MicroVmExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: runtime-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/microvms/${ImageName}"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/microvms/${ImageName}:*"
+
+  MicrovmImage:
+    Type: AWS::Lambda::MicrovmImage
+    Condition: ShouldDeployImage
+    DependsOn:
+      - BuildRole
+      - ArtifactBucket
+    Properties:
+      Name: !Ref ImageName
+      Description: llama.cpp server with MiniCPM5-1B GGUF (Q4_K_M)
+      BaseImageArn: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:aws:microvm-image:al2023-1"
+      BaseImageVersion: !Ref BaseImageVersion
+      BuildRoleArn: !GetAtt BuildRole.Arn
+      CodeArtifact:
+        Uri: !Sub "s3://${ArtifactBucket}/${ArtifactObjectKey}"
+      AdditionalOsCapabilities:
+        - ALL
+      CpuConfigurations:
+        - Architecture: ARM_64
+      Resources:
+        - MinimumMemoryInMiB: 8192
+      EgressNetworkConnectors:
+        - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
+      EnvironmentVariables:
+        - Key: LLAMA_HF_REPO
+          Value: openbmb/MiniCPM5-1B-GGUF:Q4_K_M
+        - Key: LLAMA_THREADS
+          Value: "16"
+        - Key: LLAMA_CTX_SIZE
+          Value: "2048"
+      Hooks:
+        Port: 8090
+        MicrovmImageHooks:
+          Ready: ENABLED
+          ReadyTimeoutInSeconds: 3600
+          Validate: ENABLED
+          ValidateTimeoutInSeconds: 600
+        MicrovmHooks:
+          Run: ENABLED
+          RunTimeoutInSeconds: 30
+          Resume: ENABLED
+          ResumeTimeoutInSeconds: 30
+          Suspend: ENABLED
+          SuspendTimeoutInSeconds: 30
+          Terminate: ENABLED
+          TerminateTimeoutInSeconds: 30
+      Logging:
+        CloudWatch: {}
+
+Outputs:
+  ArtifactBucketName:
+    Description: S3 bucket for the MicroVM image source zip
+    Value: !Ref ArtifactBucket
+  BuildRoleArn:
+    Description: Build role ARN for MicroVM image creation
+    Value: !GetAtt BuildRole.Arn
+  MicroVmExecutionRoleArn:
+    Description: Execution role ARN passed to run-microvm
+    Value: !GetAtt MicroVmExecutionRole.Arn
+  MicrovmImageName:
+    Description: MicroVM image name
+    Value: !Ref ImageName
+  MicrovmImageArn:
+    Condition: ShouldDeployImage
+    Description: MicroVM image ARN
+    Value: !GetAtt MicrovmImage.ImageArn
+  MicrovmImageState:
+    Condition: ShouldDeployImage
+    Description: MicroVM image state
+    Value: !GetAtt MicrovmImage.State

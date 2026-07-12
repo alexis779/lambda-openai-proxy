@@ -22,3 +22,9 @@ ollama:
   url: http://127.0.0.1:11434/v1
   token: ollama_token
   model: mistral:latest
+microvm-llama:
+  url: https://xxxxxxxx.lambda-microvm.us-west-2.on.aws
+  token: "<microvm-auth-token>"
+  model: openbmb/MiniCPM5-1B-GGUF:Q4_K_M
+  reverse_proxy: true
+  auth_header: X-aws-proxy-auth
