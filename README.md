@@ -5,7 +5,7 @@ This AWS Lambda handler acts as a proxy to call a Large Language Model.
 
 ## Architecture
 
-![OpenAI proxy](ArchitectureOpenAIProxy.png)
+![OpenAI proxy](ArchitectureOpenAIProxy.drawio.svg)
 
 The benefits of inserting a proxy between the frontend and the model inference service include
 
